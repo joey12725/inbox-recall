@@ -1,5 +1,70 @@
 # Architecture
 
+inbox-recall has two layers in one database:
+
+- **Sync** (`beeper_pg_sync`, from beeper-pg-sync): sources write canonical, deduplicated `messages` rows with stable ids.
+- **Search** (`inbox_recall`): an embedding pipeline, hybrid retrieval and the agent interfaces, all reading those rows.
+
+```
+src/inbox_recall/
+  migrations/1000_search.sql  pgvector + pg_trgm, embedding tables, full-text/trigram/order indexes
+  schema.py           migrate (core + search), per-model HNSW index management
+  embedders.py        OpenAI-compatible HTTP, sentence-transformers, deterministic hashing
+  pipeline.py         incremental, resumable embedding with chat context; LISTEN/NOTIFY watch mode
+  timeparse.py        "last spring" -> [start, end) in the user's time zone
+  query.py            SearchRequest, inline operators (from: in: when: ...), cursors
+  search.py           filters, the three rankers, rank fusion, excerpts, threads, people, chats, stats
+  render.py           compact citation-first transcripts for agents
+  tools.py            the six tool definitions shared by every interface
+  mcp.py              JSON-RPC MCP server (stdio + HTTP handler)
+  api.py              REST API + POST /mcp (stdlib HTTP server)
+  cli.py              migrate | embed | search | thread | chats | people | stats | mcp | serve | demo | eval
+  demo.py, eval.py    fabricated archive and retrieval benchmark
+src/beeper_pg_sync/   the sync layer (see below)
+extension/            Chrome MV3 extension for Instagram DMs
+```
+
+## Search layer
+
+### Schema
+
+`1000_search.sql` adds:
+
+- `embedding_models (model, provider, dims, index_name)`: one row per vector space. The model name includes the provider and any dimension override (`ollama:nomic-embed-text`, `openai:text-embedding-3-small@512`, `hash-v1@256`).
+- `message_embeddings (message_id, model, embedding vector, content_updated_at)`: one vector per message per model. `embedding` has no fixed width; `content_updated_at` is the message version that was embedded.
+- A partial HNSW index per model, created on first use: `USING hnsw ((embedding::vector(768)) vector_cosine_ops) WHERE model = 'ollama:nomic-embed-text'`. Queries cast the same way and inline the model name, so the planner can prove the partial predicate and use the index.
+- `GIN (to_tsvector('english', body))` for ranked full-text search, `GIN (body gin_trgm_ops)` for fuzzy matching, `(conversation_id, sent_at, id)` for thread windows and keyset pagination, `(sender_id)` for person lookups, and a trigram index over participant names and handles.
+
+### Embedding pipeline
+
+The queue is a query, not a table: messages with text, not deleted, with no vector for the active model or with `messages.content_updated_at` newer than the embedded version. The pipeline walks that set in id order with keyset pagination, so a full pass over millions of rows is linear.
+
+For each message it builds a short document: the network and chat title, up to `EMBED_CONTEXT_MESSAGES` earlier messages from the same chat within six hours, then the message itself. Each batch is embedded and upserted in one transaction. A crash loses at most one batch. Deleted or emptied messages lose their vectors at the start of every run.
+
+`inbox-recall embed --watch` (and `serve --embed`) runs a pass, then waits on `LISTEN beeper_pg_sync`; the sync layer notifies after every ingest that adds or changes rows, so new messages are searchable within seconds. A poll interval catches anything missed.
+
+### Retrieval
+
+`Searcher.search()` builds one set of SQL predicates from the request (sender, person, chat, network, direction, time range) and runs up to three rankers with them:
+
+1. **semantic**: `ORDER BY embedding::vector(d) <=> query::vector(d)` on the model's HNSW index, with `hnsw.iterative_scan = relaxed_order` (pgvector 0.8+) so selective filters keep scanning instead of returning too few rows. Results are re-sorted by exact distance.
+2. **keyword**: full-text match on any query term, ordered by "contains every term" then `ts_rank_cd`. Quoted phrases, `OR` and `-term` switch to `websearch_to_tsquery` semantics.
+3. **fuzzy**: `word_similarity` trigram matching for queries of up to four words, used when full-text search finds fewer than three messages containing every term.
+
+Scores merge with weighted reciprocal rank fusion (`k = 60`; weights 1.0 / 1.0 / 0.6) plus a bonus for messages containing every term. See [retrieval.md](retrieval.md) for the reasoning and the benchmark.
+
+Each ranker returns a fixed pool (200 by default, or 3x the page size). The first page fixes the pool size in the cursor, so later pages slice the same fused list: no duplicates, no gaps. With an empty query, search switches to chronological browsing with keyset cursors over `(sent_at, id)`, which can walk any number of messages.
+
+### Excerpts
+
+For the page of hits, one `LATERAL` query pulls `context` messages before and after each hit from the `(conversation_id, sent_at, id)` index. Windows that share a message are merged with a union-find, so three hits in one exchange come back as one excerpt. Reply targets outside the window are attached as `in_reply_to`. Excerpts are ordered by their best hit.
+
+### Interfaces
+
+`tools.py` defines each tool once: JSON schema, handler and text renderer. `mcp.py` maps `tools/list` and `tools/call` onto it; `api.py` maps `GET /v1/...` routes onto it; `cli.py` calls the same handlers. Validation errors come back as tool errors (`isError: true`) rather than protocol errors, so the model can read them and retry.
+
+# Sync layer
+
 ```
 src/beeper_pg_sync/
   model.py           the ingestion contract: Account, Conversation, Participant, Message, Batch
@@ -10,7 +75,6 @@ src/beeper_pg_sync/
   sources/instagram.py  Chrome extension payloads and CSV/ZIP/JSON exports
   server.py          HTTP ingest endpoint for the extension
   cli.py             migrate | sync | import | serve | run | status
-extension/           Chrome MV3 extension (content script UI, page-world metadata bridge, service worker)
 ```
 
 ## Data model
