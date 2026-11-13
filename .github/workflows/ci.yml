@@ -26,8 +26,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --python 3.12
-      - run: uv run ruff check src tests
-      - run: uv run ruff format --check src tests
+      - run: uv run ruff check src tests scripts
+      - run: uv run ruff format --check src tests scripts
       - run: uv run pytest -q
 
   # Retrieval benchmark with a real embedding model served by Ollama, through the
@@ -79,6 +79,29 @@ jobs:
         with:
           name: eval
           path: eval-nomic.json
+
+  # Latency on a 250k-message synthetic archive. Manual: Actions -> CI -> Run workflow.
+  scale:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: sync
+          POSTGRES_PASSWORD: sync
+          POSTGRES_DB: recall_scale
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sync"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://sync:sync@localhost:5432/recall_scale
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --python 3.12
+      - run: uv run python scripts/scale_bench.py --messages 250000 | tee -a "$GITHUB_STEP_SUMMARY"
 
   extension:
     runs-on: ubuntu-latest
