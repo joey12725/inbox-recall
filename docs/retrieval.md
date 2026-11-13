@@ -15,7 +15,7 @@ Running all three under the same filters and fusing their ranks keeps each one's
 Two details make the fusion behave on chat logs:
 
 - **All-terms bonus.** A message that contains every query term gets an extra half of a first-place vote. Short filler like "let me check and get back to you" can sit close to a query in embedding space; a message that actually says "pay you back" should win.
-- **Fuzzy as a backstop.** Trigram matching only runs when full-text search finds fewer than three messages with every term, and only for queries of four words or fewer. That's when typos and partial names are the likely problem, and it keeps fuzzy noise out of queries that already have good exact matches.
+- **Fuzzy as a backstop.** Trigram matching only runs when full-text search finds fewer than three messages with every term, only for queries of four words or fewer, and only on the words full-text search can't find anywhere in the archive ("manteigria", "dentst"). That's when typos and partial names are the likely problem. It keeps fuzzy noise out of queries that already match, and a 300 ms statement timeout means it can never hold a search up.
 
 ## Embedding messages with context
 

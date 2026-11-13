@@ -49,7 +49,7 @@ For each message it builds a short document: the network and chat title, up to `
 
 1. **semantic**: `ORDER BY embedding::vector(d) <=> query::vector(d)` on the model's HNSW index, with `hnsw.iterative_scan = relaxed_order` (pgvector 0.8+) so selective filters keep scanning instead of returning too few rows. Results are re-sorted by exact distance.
 2. **keyword**: full-text match on any query term, ordered by "contains every term" then `ts_rank_cd`. Quoted phrases, `OR` and `-term` switch to `websearch_to_tsquery` semantics.
-3. **fuzzy**: `word_similarity` trigram matching for queries of up to four words, used when full-text search finds fewer than three messages containing every term.
+3. **fuzzy**: `word_similarity` trigram matching on the query words that full-text search can't find anywhere, for queries of up to four words, used when fewer than three messages contain every term. It runs under a 300 ms statement timeout.
 
 Scores merge with weighted reciprocal rank fusion (`k = 60`; weights 1.0 / 1.0 / 0.6) plus a bonus for messages containing every term. See [retrieval.md](retrieval.md) for the reasoning and the benchmark.
 

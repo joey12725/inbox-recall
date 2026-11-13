@@ -6,9 +6,9 @@ reciprocal rank fusion (RRF):
 - semantic: cosine ANN over the active model's partial HNSW index
 - keyword: Postgres full-text search (English stemming), OR-of-terms with a
   bonus for messages that contain every term
-- fuzzy: trigram word similarity, for names, typos and partial words in short
-  queries, used when full-text search finds fewer than three messages with
-  every term
+- fuzzy: trigram word similarity on the query words full-text search can't
+  find at all (typos, partial names), for short queries, used when fewer than
+  three messages contain every term
 
 Hits come back as conversation excerpts: each hit plus N messages either side,
 with overlapping windows from the same chat merged, so an agent reads threads
@@ -39,6 +39,7 @@ DEFAULT_POOL = 200
 MAX_POOL = 1000
 FUZZY_MAX_WORDS = 4
 FUZZY_THRESHOLD = 0.55
+FUZZY_TIMEOUT_MS = 300
 SELF_NAMES = {"me", "myself", "i", "self", "you"}
 
 MESSAGE_COLUMNS = """
@@ -234,9 +235,22 @@ class Searcher:
         rows = self.conn.execute(q, {**f.params, **params, "plain": query, "k": k}).fetchall()
         return [r["id"] for r in rows], {r["id"] for r in rows if r["all_terms"]}
 
+    def _unknown_words(self, words: list[str]) -> list[str]:
+        """Query words full-text search can't find anywhere: the likely typos and partial names."""
+        rows = self.conn.execute(
+            """SELECT w FROM unnest(%s::text[]) AS w
+               WHERE numnode(plainto_tsquery('english', w)) > 0
+                 AND NOT EXISTS (SELECT 1 FROM messages WHERE search_tsv @@ plainto_tsquery('english', w))""",
+            (words,),
+        ).fetchall()
+        return [r["w"] for r in rows]
+
     def _fuzzy(self, query: str, f: Filters, k: int) -> list[int]:
         words = terms(query)
-        if not words or len(words) > FUZZY_MAX_WORDS or len(query.strip()) < 3:
+        if not words or len(words) > FUZZY_MAX_WORDS:
+            return []
+        words = self._unknown_words(words)
+        if not words or len(" ".join(words)) < 3:
             return []
         q = f"""
             SELECT m.id, word_similarity(%(fq)s, m.body) AS score
@@ -244,11 +258,15 @@ class Searcher:
             WHERE %(fq)s <%% m.body AND {f.sql}
             ORDER BY score DESC, m.sent_at DESC NULLS LAST, m.id DESC
             LIMIT %(k)s"""
-        with self.conn.transaction():
-            self.conn.execute(
-                sql.SQL("SET LOCAL pg_trgm.word_similarity_threshold = {}").format(sql.Literal(FUZZY_THRESHOLD))
-            )
-            rows = self.conn.execute(q, {**f.params, "fq": " ".join(words), "k": k}).fetchall()
+        try:
+            with self.conn.transaction():
+                self.conn.execute(
+                    sql.SQL("SET LOCAL pg_trgm.word_similarity_threshold = {}").format(sql.Literal(FUZZY_THRESHOLD))
+                )
+                self.conn.execute(sql.SQL("SET LOCAL statement_timeout = {}").format(sql.Literal(FUZZY_TIMEOUT_MS)))
+                rows = self.conn.execute(q, {**f.params, "fq": " ".join(words), "k": k}).fetchall()
+        except psycopg.errors.QueryCanceled:
+            return []  # fuzzy matching is a backstop; never let it hold up a search
         return [r["id"] for r in rows]
 
     # -- public API ---------------------------------------------------------
