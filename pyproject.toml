@@ -1,15 +1,16 @@
 [project]
-name = "beeper-pg-sync"
-version = "2.0.0"
-description = "Sync every Beeper chat, plus Instagram DMs from a Chrome extension, into one Postgres database."
+name = "inbox-recall"
+version = "1.0.0"
+description = "Hybrid semantic + keyword search over every chat you have (Beeper networks + Instagram), served to self-hosted agents over MCP."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Joey Hersh" }]
 requires-python = ">=3.11"
 dependencies = ["psycopg[binary]>=3.2"]
-keywords = ["beeper", "postgres", "instagram", "messages", "chat-archive"]
+keywords = ["mcp", "pgvector", "hybrid-search", "rag", "beeper", "postgres", "instagram", "messages", "agents"]
 
 [project.scripts]
+inbox-recall = "inbox_recall.cli:main"
 beeper-pg-sync = "beeper_pg_sync.cli:main"
 
 [dependency-groups]
@@ -20,10 +21,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/beeper_pg_sync"]
+packages = ["src/beeper_pg_sync", "src/inbox_recall"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/sync"]
+testpaths = ["tests/sync", "tests/recall"]
 
 [tool.ruff]
 line-length = 120
