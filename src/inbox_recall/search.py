@@ -224,11 +224,11 @@ class Searcher:
             tsquery = "to_tsquery('english', %(q)s)"
             params = {"q": " | ".join(words)}
         q = f"""
-            SELECT m.id, s.all_terms, ts_rank_cd(to_tsvector('english', m.body), tq.q, 1) AS score
+            SELECT m.id, s.all_terms, ts_rank_cd(m.search_tsv, tq.q, 1) AS score
             {FROM_MESSAGES}
             CROSS JOIN (SELECT {tsquery} AS q, plainto_tsquery('english', %(plain)s) AS every) tq
-            CROSS JOIN LATERAL (SELECT to_tsvector('english', m.body) @@ tq.every AS all_terms) s
-            WHERE to_tsvector('english', m.body) @@ tq.q AND {f.sql}
+            CROSS JOIN LATERAL (SELECT m.search_tsv @@ tq.every AS all_terms) s
+            WHERE m.search_tsv @@ tq.q AND {f.sql}
             ORDER BY s.all_terms DESC, score DESC, m.sent_at DESC NULLS LAST, m.id DESC
             LIMIT %(k)s"""
         rows = self.conn.execute(q, {**f.params, **params, "plain": query, "k": k}).fetchall()

@@ -195,7 +195,7 @@ Hybrid matches or beats each ranker alone in every group, and the first relevant
 
 1. **Sync.** beeper-pg-sync writes every chat into `messages` with stable ids, merges the same message seen by two sources, and bumps `content_updated_at` on edits. Each write sends a `NOTIFY`.
 2. **Embed.** `inbox-recall embed` picks up messages with no vector (or a stale one) for the active model, embeds each with its chat title and recent turns, and commits per batch. Each model gets its own partial HNSW index over `embedding::vector(dims)`, so models never mix and swapping one needs no migration.
-3. **Retrieve.** One set of SQL filters feeds three rankers: HNSW cosine search (with pgvector's iterative scan so filters don't starve it), `to_tsvector('english')` full-text, and trigram similarity. Weighted reciprocal rank fusion merges them, with a bonus for messages that contain every query term.
+3. **Retrieve.** One set of SQL filters feeds three rankers: HNSW cosine search (with pgvector's iterative scan so filters don't starve it), stored `to_tsvector('english')` full-text, and trigram similarity. Weighted reciprocal rank fusion merges them, with a bonus for messages that contain every query term.
 4. **Expand.** Each hit pulls N messages either side from the `(conversation_id, sent_at, id)` index. Overlapping windows merge into one excerpt and reply targets are quoted inline.
 5. **Serve.** The same tool registry backs MCP (stdio and HTTP), the REST API and the CLI.
 

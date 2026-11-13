@@ -33,7 +33,7 @@ extension/            Chrome MV3 extension for Instagram DMs
 - `embedding_models (model, provider, dims, index_name)`: one row per vector space. The model name includes the provider and any dimension override (`ollama:nomic-embed-text`, `openai:text-embedding-3-small@512`, `hash-v1@256`).
 - `message_embeddings (message_id, model, embedding vector, content_updated_at)`: one vector per message per model. `embedding` has no fixed width; `content_updated_at` is the message version that was embedded.
 - A partial HNSW index per model, created on first use: `USING hnsw ((embedding::vector(768)) vector_cosine_ops) WHERE model = 'ollama:nomic-embed-text'`. Queries cast the same way and inline the model name, so the planner can prove the partial predicate and use the index.
-- `GIN (to_tsvector('english', body))` for ranked full-text search, `GIN (body gin_trgm_ops)` for fuzzy matching, `(conversation_id, sent_at, id)` for thread windows and keyset pagination, `(sender_id)` for person lookups, and a trigram index over participant names and handles.
+- a stored `search_tsv` column (`to_tsvector('english', body)`) with a GIN index for ranked full-text search, `GIN (body gin_trgm_ops)` for fuzzy matching, `(conversation_id, sent_at, id)` for thread windows and keyset pagination, `(sender_id)` for person lookups, and a trigram index over participant names and handles.
 
 ### Embedding pipeline
 

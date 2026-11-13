@@ -30,9 +30,11 @@ CREATE TABLE message_embeddings (
 
 CREATE INDEX message_embeddings_model ON message_embeddings (model, content_updated_at);
 
--- Keyword search: English stemming for ranking, trigrams for names, typos and
--- partial words. Queries must use these exact expressions to hit the indexes.
-CREATE INDEX messages_body_english ON messages USING gin (to_tsvector('english', body));
+-- Keyword search: a stored English tsvector (ranking reads it instead of
+-- re-parsing every matching body), and trigrams for names, typos and partial words.
+ALTER TABLE messages
+    ADD COLUMN search_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', body)) STORED;
+CREATE INDEX messages_search_tsv ON messages USING gin (search_tsv);
 CREATE INDEX messages_body_trgm ON messages USING gin (body gin_trgm_ops);
 
 -- Thread reconstruction walks a conversation by (sent_at, id) in both directions.
