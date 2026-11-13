@@ -91,4 +91,14 @@ The demo archive is small and synthetic, so treat these as a regression harness 
 
 Everything on the query path is index-backed: the per-model HNSW index, the GIN full-text and trigram indexes, and the `(conversation_id, sent_at, id)` b-tree for thread windows and browsing. Embedding is incremental, so a sync that adds 50 messages costs 50 embeddings. `scripts/scale_bench.py` builds a synthetic archive of any size and times the agent-facing calls; CI's manual `scale` job runs it at 250,000 messages.
 
-SCALE_TABLE
+Latest run (250,053 messages over eight years, stock `pgvector/pgvector:pg17` settings on a GitHub-hosted runner, 256-d vectors):
+
+| call | p50 ms | p95 ms |
+| --- | ---: | ---: |
+| `search_messages`, hybrid, no filters | 11 | 592 |
+| `search_messages`, hybrid + person/time/network filters | 41 | 166 |
+| `search_messages`, keyword only | 3 | 476 |
+| `search_messages`, filters only (browse) | 5 | 8 |
+| `get_conversation`, 20 messages either side | 4 | 4 |
+
+The slow tail comes from queries whose words appear in tens of thousands of messages (the synthetic corpus draws from a 90-word vocabulary, so every common word is very common); more `shared_buffers` and `work_mem` than the container defaults pull it in. Filtered searches, which is how agents usually ask, stay well under a quarter second.
