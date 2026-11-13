@@ -4,13 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   python:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: sync
           POSTGRES_PASSWORD: sync
@@ -28,6 +29,56 @@ jobs:
       - run: uv run ruff check src tests
       - run: uv run ruff format --check src tests
       - run: uv run pytest -q
+
+  # Retrieval benchmark with a real embedding model served by Ollama, through the
+  # same OpenAI-compatible provider users run locally.
+  eval:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: sync
+          POSTGRES_PASSWORD: sync
+          POSTGRES_DB: recall_eval
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sync"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      ollama:
+        image: ollama/ollama:latest
+        ports: ["11434:11434"]
+    env:
+      DATABASE_URL: postgresql://sync:sync@localhost:5432/recall_eval
+      EMBED_PROVIDER: ollama
+      EMBED_MODEL: nomic-embed-text
+      EMBED_QUERY_PREFIX: "search_query: "
+      EMBED_DOCUMENT_PREFIX: "search_document: "
+      RECALL_TIMEZONE: America/Chicago
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --python 3.12
+      - name: Pull the embedding model
+        run: curl -sf http://localhost:11434/api/pull -d '{"model":"nomic-embed-text","stream":false}'
+      - run: uv run inbox-recall demo
+      - name: Benchmark (nomic-embed-text)
+        run: |
+          uv run inbox-recall eval | tee -a "$GITHUB_STEP_SUMMARY"
+          uv run inbox-recall eval --json > eval-nomic.json
+      - name: Benchmark (hash embedder baseline)
+        env:
+          EMBED_PROVIDER: hash
+          EMBED_QUERY_PREFIX: ""
+          EMBED_DOCUMENT_PREFIX: ""
+        run: |
+          uv run inbox-recall embed
+          echo >> "$GITHUB_STEP_SUMMARY"
+          uv run inbox-recall eval | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval
+          path: eval-nomic.json
 
   extension:
     runs-on: ubuntu-latest

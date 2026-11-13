@@ -1,8 +1,8 @@
-# Postgres for beeper-pg-sync. The pgvector image is plain Postgres 17 with the
-# vector extension available, so embedding layers can be added without a new image.
+# inbox-recall: Postgres + pgvector, the sync daemon, and the search/MCP server.
 #
-#   docker compose up -d db                     # just the database
-#   docker compose --profile daemon up -d       # database + sync daemon + ingest server
+#   docker compose up -d db                               # just the database
+#   docker compose --profile daemon up -d                 # + Beeper sync + search API/MCP + embedder
+#   docker compose --profile daemon --profile ollama up -d   # + a local Ollama for embeddings
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -23,6 +23,8 @@ services:
   sync:
     build: .
     profiles: [daemon]
+    entrypoint: ["beeper-pg-sync"]
+    command: ["run"]
     depends_on:
       db:
         condition: service_healthy
@@ -37,5 +39,30 @@ services:
       - "127.0.0.1:8765:8765"
     restart: unless-stopped
 
+  recall:
+    build: .
+    profiles: [daemon]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://sync:${POSTGRES_PASSWORD:-sync}@db:5432/messages
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8766:8766"
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [ollama]
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  ollama:
